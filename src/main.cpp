@@ -1,6 +1,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <format>
 #include <future>
 #include <iostream>
 #include <memory>
@@ -9,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <algorithm>
 
 #include "provider.hpp"
 
@@ -25,6 +27,7 @@ static void render_table(const std::vector<Report>& reports);
 static void render_short(const std::vector<Report>& reports);
 static void render_json(const std::vector<Report>& reports);
 static bool any_ok(const std::vector<Report>& reports);
+static std::string format_duration(std::chrono::seconds d);
 
 int main(int argc, char** argv) {
 
@@ -103,20 +106,46 @@ static void cache_write(std::string_view provider, std::string_view body) {
 
 
 // Never throws: failures land in Report::error.
-// TODO: unless refresh, try cache_read(p.name(), kCacheMaxAge). Otherwise call
-// p.fetch(). Parse, and only cache_write a body that parsed. Catch
-// std::exception and store e.what() in Report::error.
 static Report fetch_report(Provider& p, bool refresh) {
-    throw std::logic_error("todo: fetch_report");
+    Report r;
+    r.provider = p.name();
+    try {
+        std::optional<std::string> body;
+        if (!refresh) body = cache_read(p.name(), kCacheMaxAge);
+        bool fresh = !body;
+        if (fresh) body = p.fetch();
+        r.windows = p.parse(*body);
+        if (fresh) cache_write(p.name(), *body);
+        r.ok = true;
+    } catch (const std::exception& e) {
+        r.error = e.what();
+    }
+    return r;
 }
 
 
-// TODO: one block per provider, one row per window:
+// One block per provider, one row per window:
 //   claude  5h   42%  resets in 2h 13m
 //           7d   18%  resets in 4d 3h
 //   codex   error: not logged in
 static void render_table(const std::vector<Report>& reports) {
-    throw std::logic_error("todo: render_table");
+    auto now = std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now());
+    for (const auto& r : reports) {
+        if (!r.ok) {
+            std::cout << std::format("{:<8}error: {}\n", r.provider, r.error);
+            continue;
+        }
+        std::string_view name = r.provider;
+        for (const auto& w : r.windows) {
+            std::cout << std::format("{:<8}{:<5}{:3.0f}%", name, w.label, w.used_pct);
+            // A cached body can hold a reset time that has already passed
+            if (w.resets_at)
+                std::cout << "  resets in "
+                          << format_duration(std::max(*w.resets_at - now, std::chrono::seconds{0}));
+            std::cout << "\n";
+            name = "";
+        }
+    }
 }
 
 
@@ -133,11 +162,21 @@ static void render_json(const std::vector<Report>& reports) {
 
 
 static bool any_ok(const std::vector<Report>& reports) {
-    throw std::logic_error("todo: any_ok");
+    return std::ranges::any_of(reports, &Report::ok);
 }
 
 
-// TODO: "2h 13m", "4d 3h", "45s". At most the two largest nonzero units.
+// "2h 13m", "4d 3h", "45s". At most the two largest nonzero units.
 static std::string format_duration(std::chrono::seconds d) {
-    throw std::logic_error("todo: format_duration");
+    long long s = d.count();
+    const std::pair<long long, char> units[] = {
+        {s / 86400, 'd'}, {s / 3600 % 24, 'h'}, {s / 60 % 60, 'm'}, {s % 60, 's'}};
+    std::string out;
+    int shown = 0;
+    for (auto [n, unit] : units) {
+        if (n == 0 || shown == 2) continue;
+        if (shown++) out += ' ';
+        out += std::to_string(n) + unit;
+    }
+    return out.empty() ? "0s" : out;
 }
