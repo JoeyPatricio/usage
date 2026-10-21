@@ -16,6 +16,7 @@
 
 #include <unistd.h>
 
+#include "json.hpp"
 #include "provider.hpp"
 
 struct Options {
@@ -191,15 +192,49 @@ static void render_table(const std::vector<Report>& reports) {
 }
 
 
-// TODO: one line, e.g. "claude 42%/18% codex 7%/30%"
+// One line for status bars, windows in provider order:
+//   claude 42%/18% · codex err
 static void render_short(const std::vector<Report>& reports) {
-    throw std::logic_error("todo: render_short");
+    std::string line;
+    for (const auto& r : reports) {
+        if (!line.empty()) line += " · ";
+        line += r.provider + ' ';
+        if (!r.ok) {
+            line += "err";
+            continue;
+        }
+        for (std::size_t i = 0; i < r.windows.size(); i++) {
+            if (i) line += '/';
+            line += std::format("{:.0f}%", r.windows[i].used_pct);
+        }
+    }
+    std::cout << line << "\n";
 }
 
 
-// TODO: array of reports, resets_at as epoch seconds or null.
+// Every report has the same keys so jq filters don't need to check ok first.
+// error is null when ok, resets_at is epoch seconds or null.
 static void render_json(const std::vector<Report>& reports) {
-    throw std::logic_error("todo: render_json");
+    auto out = nlohmann::json::array();
+    for (const auto& r : reports) {
+        auto windows = nlohmann::json::array();
+        for (const auto& w : r.windows) {
+            windows.push_back({
+                {"label", w.label},
+                {"used_pct", w.used_pct},
+                {"resets_at", w.resets_at
+                    ? nlohmann::json(w.resets_at->time_since_epoch().count())
+                    : nlohmann::json(nullptr)},
+            });
+        }
+        out.push_back({
+            {"provider", r.provider},
+            {"ok", r.ok},
+            {"error", r.ok ? nlohmann::json(nullptr) : nlohmann::json(r.error)},
+            {"windows", std::move(windows)},
+        });
+    }
+    std::cout << out.dump(2) << "\n";
 }
 
 
