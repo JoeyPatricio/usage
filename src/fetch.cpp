@@ -4,10 +4,15 @@
 
 #include "httplib.h"
 
-// TODO: build an httplib::SSLClient for host, set connect/read timeouts,
-// copy headers into httplib::Headers, call Get(path). If the result is
-// falsy, throw with httplib::to_string(res.error()).
 HttpResponse https_get(const std::string& host, const std::string& path,
                        const Headers& headers) {
-    throw std::logic_error("todo: https_get");
+    httplib::SSLClient cli(host);
+    cli.set_connection_timeout(10);
+    cli.set_read_timeout(10);
+
+    if (auto res = cli.Get(path, httplib::Headers(headers.begin(), headers.end()))) {
+        return {res->status, res->body};
+    } else {
+        throw std::runtime_error(host + ": " + httplib::to_string(res.error()));
+    }
 }
