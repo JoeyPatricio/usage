@@ -1,6 +1,7 @@
 CXX      ?= g++
 CXXFLAGS ?= -std=c++20 -Wall -Wextra -Wpedantic -g
-CPPFLAGS += -MMD -MP
+CPPFLAGS += -MMD -MP -DCPPHTTPLIB_OPENSSL_SUPPORT
+LDLIBS   += -lssl -lcrypto
 
 SRC_DIR   := src
 BUILD_DIR := build
