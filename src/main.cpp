@@ -4,13 +4,17 @@
 #include <format>
 #include <future>
 #include <iostream>
+#include <fstream>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
 #include <algorithm>
+
+#include <unistd.h>
 
 #include "provider.hpp"
 
@@ -92,16 +96,50 @@ static void print_help() {
 constexpr std::chrono::seconds kCacheMaxAge{60};
 
 
-// TODO: return the cached body if the file exists and is younger than max_age.
-static std::optional<std::string> cache_read(std::string_view provider,
-                                             std::chrono::seconds max_age) {
-    throw std::logic_error("todo: cache_read");
+static std::filesystem::path cache_path(std::string_view provider) {
+    std::filesystem::path dir;
+    if (const char* xdg = std::getenv("XDG_CACHE_HOME"); xdg && *xdg)
+        dir = xdg;
+    else if (const char* home = std::getenv("HOME"))
+        dir = std::filesystem::path(home) / ".cache";
+    else
+        throw std::runtime_error("HOME is not set");
+    return dir / "usage" / (std::string(provider) + ".json");
 }
 
 
-// TODO: create the cache dir, write to a temp file, rename over the target.
+// Any failure to stat or open the file is a cache miss.
+static std::optional<std::string> cache_read(std::string_view provider,
+                                             std::chrono::seconds max_age) {
+    auto path = cache_path(provider);
+    std::error_code ec;
+    auto mtime = std::filesystem::last_write_time(path, ec);
+    if (ec || std::filesystem::file_time_type::clock::now() - mtime > max_age)
+        return std::nullopt;
+
+    std::ifstream file(path);
+    if (!file) return std::nullopt;
+    std::ostringstream body;
+    body << file.rdbuf();
+    return body.str();
+}
+
+
+// Writes a temp file and renames it so readers never see a partial body.
+// The temp name includes the pid because a status bar can start two runs at once.
 static void cache_write(std::string_view provider, std::string_view body) {
-    throw std::logic_error("todo: cache_write");
+    auto path = cache_path(provider);
+    std::filesystem::create_directories(path.parent_path());
+
+    auto tmp = path;
+    tmp += std::format(".{}.tmp", getpid());
+    std::ofstream file(tmp);
+    file << body;
+    file.close();
+    if (!file)
+        throw std::filesystem::filesystem_error("can't write cache file", tmp,
+                                                std::make_error_code(std::errc::io_error));
+    std::filesystem::rename(tmp, path);
 }
 
 
@@ -115,7 +153,11 @@ static Report fetch_report(Provider& p, bool refresh) {
         bool fresh = !body;
         if (fresh) body = p.fetch();
         r.windows = p.parse(*body);
-        if (fresh) cache_write(p.name(), *body);
+        if (fresh) {
+            // A failed write only costs a refetch on the next run
+            try { cache_write(p.name(), *body); }
+            catch (const std::filesystem::filesystem_error&) {}
+        }
         r.ok = true;
     } catch (const std::exception& e) {
         r.error = e.what();
